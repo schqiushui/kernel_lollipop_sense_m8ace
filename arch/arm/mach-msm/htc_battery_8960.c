@@ -145,6 +145,10 @@ static int critical_alarm_level_set;
 struct wake_lock voltage_alarm_wake_lock;
 struct wake_lock batt_shutdown_wake_lock;
 
+#define RECHARGE_LEVEL	97
+
+#define RECHARGE_RECOVER_LEVEL 95
+
 #ifdef CONFIG_HAS_EARLYSUSPEND
 static struct early_suspend early_suspend;
 #endif
@@ -180,6 +184,7 @@ struct htc_battery_info {
 	int overload_vol_thr_mv;
 	int overload_curr_thr_ma;
 	bool usb_temp_monitor_enable;
+	bool disable_pwrpath_after_eoc;
 	int usb_temp_overheat_increase_threshold;
 	int normal_usb_temp_threshold;
 	int usb_temp_overheat_threshold;
@@ -257,6 +262,7 @@ struct mutex batt_set_alarm_lock;
 static int fb_notifier_callback(struct notifier_block *self,
                                  unsigned long event, void *data);
 #endif
+static bool is_fb_notifier_ready = false;
 
 struct dec_level_by_current_ua {
 	int threshold_ua;
@@ -1702,6 +1708,30 @@ inline static int is_voltage_critical_low(int voltage_mv)
 	return (voltage_mv < htc_batt_info.critical_low_voltage_mv) ? 1 : 0;
 }
 
+static void check_recharge_after_eoc(void)
+{
+	if (htc_batt_info.icharger->set_charger_after_eoc){
+		if(batt_full_eoc_stop && htc_batt_info.rep.level_raw <= RECHARGE_LEVEL){
+			BATT_LOG("%s: set charger to %d due to raw_level: %d%% drop",
+					__func__, !!htc_batt_info.rep.charging_enabled,
+					htc_batt_info.rep.level_raw);
+			htc_batt_info.icharger->set_charger_after_eoc(!!htc_batt_info.rep.charging_enabled);
+		}
+	}
+}
+
+static void check_recharge_recover(void)
+{
+	
+	if (htc_batt_info.icharger->set_charger_after_eoc){
+		if(htc_batt_info.rep.level_raw <= RECHARGE_RECOVER_LEVEL){
+			BATT_LOG("%s: recover recharge due to raw_level: %d%% drop",
+					__func__, htc_batt_info.rep.level_raw);
+			htc_batt_info.icharger->set_charger_after_eoc(!!htc_batt_info.rep.charging_enabled);
+		}
+	}
+}
+
 #define CHG_ONE_PERCENT_LIMIT_PERIOD_MS	(1000 * 60)
 #define LEVEL_GAP_BETWEEN_UI_AND_RAW	3
 static void batt_check_overload(unsigned long time_since_last_update_ms)
@@ -2074,9 +2104,55 @@ static void batt_level_adjust(unsigned long time_since_last_update_ms)
 	first = 0;
 }
 
+#define SCREEN_FILE_NODE_PATH "sys/class/graphics/fb0/show_blank_event"
+#define SCREEN_FILE_NODE_SIZE 18
+int update_screen_status_by_filenode (void)
+{
+	char file_node_data[SCREEN_FILE_NODE_SIZE];
+	struct file *filp = NULL;
+	int  rc;
+
+	filp = filp_open(SCREEN_FILE_NODE_PATH, O_RDONLY, 0);
+	if (IS_ERR(filp)) {
+		pr_warn("%s	Open file node \"show_blank_event\" fail.", __func__);
+		return -EINVAL;
+	}
+
+	rc = filp->f_op->read(filp, file_node_data, SCREEN_FILE_NODE_SIZE, &filp->f_pos);
+	if (rc < 0) {
+		filp_close(filp, NULL);
+		pr_warn("%s	Read file node \"show_blank_event\" fail.", __func__);
+		return -EINVAL;
+	}
+
+	filp_close(filp, NULL);
+
+	if (strcmp( "panel_power_on = ", file_node_data)) {
+		if (file_node_data[SCREEN_FILE_NODE_SIZE - 1] == '0') {
+			htc_batt_info.state |= STATE_EARLY_SUSPEND;
+			BATT_LOG("%s: Screen is OFF", __func__);
+		} else {
+			htc_batt_info.state &= ~STATE_EARLY_SUSPEND;
+			BATT_LOG("%s: Screen is ON", __func__);
+		}
+	} else {
+		pr_err("%s: The patterm of file ndoe is not correct, %s.", __func__, file_node_data);
+		return -EINVAL;
+	}
+
+	return 0;
+}
 
 static void batt_update_limited_charge(void)
 {
+	int rc;
+
+	if (!htc_batt_info.fb_notif.notifier_call || !is_fb_notifier_ready) {
+		rc = update_screen_status_by_filenode();
+		if (rc)
+			return;
+	}
+
 	if (htc_batt_info.state & STATE_EARLY_SUSPEND) {
 		
 		if ((!(chg_limit_reason & HTC_BATT_CHG_LIMIT_BIT_THRML)) &&
@@ -2244,6 +2320,10 @@ static void batt_worker(struct work_struct *work)
 
 	
 	batt_level_adjust(time_since_last_update_ms);
+
+	
+	if (htc_batt_info.disable_pwrpath_after_eoc)
+		check_recharge_after_eoc();
 
 	
 	if ((htc_batt_info.rep.level != 0) && (critical_shutdown ||
@@ -2487,6 +2567,10 @@ static void batt_worker(struct work_struct *work)
 			htc_batt_info.igauge->enable_lower_voltage_alarm(1);
 	}
 
+	
+	if (batt_full_eoc_stop)
+		check_recharge_recover();
+
 	first = 0;
 	prev_charging_enabled = charging_enabled;
 	prev_pwrsrc_enabled = pwrsrc_enabled;
@@ -2694,6 +2778,10 @@ static int fb_notifier_callback(struct notifier_block *self,
 {
 	struct fb_event *evdata = data;
 	int *blank;
+	static bool first = true;
+
+	if(first)
+		is_fb_notifier_ready = true;
 
 	if (evdata && evdata->data && event == FB_EVENT_BLANK) {
 		blank = evdata->data;
@@ -2714,6 +2802,7 @@ static int fb_notifier_callback(struct notifier_block *self,
 		}
 	}
 
+	first = false;
 	return 0;
 }
 #elif defined(CONFIG_HAS_EARLYSUSPEND)
@@ -2950,6 +3039,7 @@ static int htc_battery_probe(struct platform_device *pdev)
 				pdata->usb_temp_overheat_increase_threshold;
 	htc_batt_info.normal_usb_temp_threshold =
 				pdata->normal_usb_temp_threshold;
+	htc_batt_info.disable_pwrpath_after_eoc = pdata->disable_pwrpath_after_eoc;
 	htc_batt_info.smooth_chg_full_delay_min = pdata->smooth_chg_full_delay_min;
 	htc_batt_info.decreased_batt_level_check = pdata->decreased_batt_level_check;
 	chg_limit_active_mask = pdata->chg_limit_active_mask;
