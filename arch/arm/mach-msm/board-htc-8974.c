@@ -665,6 +665,7 @@ static struct htc_battery_platform_data htc_battery_pdev_data = {
 						pm8941_get_input_voltage_regulation,
 	.icharger.store_battery_charger_data = pm8941_store_battery_charger_data_emmc,
 	.icharger.set_ftm_charge_enable_type = pm8941_set_ftm_charge_enable_type,
+	.icharger.set_charger_after_eoc = pm8941_set_charger_after_eoc,
 	
 	.igauge.name = "pm8941",
 	.igauge.get_battery_voltage = pm8941_get_batt_voltage,
