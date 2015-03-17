@@ -74,10 +74,7 @@ static char activity_buf[MAX_BUF];
 static char non_activity_buf[MAX_BUF];
 static char media_mode_buf[MAX_BUF];
 static int app_timeout_expired;
-static int is_touch_boosted;
-static int touch_boost_duration_value = 200;
-static int is_long_duration_touch_boosted;
-static int long_duration_touch_boost_duration_value = 3000;
+static int is_touch_boosted;;
 
 static void null_cb(const char *attr) {
 	do { } while (0);
@@ -295,10 +292,6 @@ int pnpmgr_battery_charging_enabled(int charging_enabled)
 	return 0;
 }
 
-
-define_int_show(touch_boost_duration, touch_boost_duration_value);
-define_int_store(touch_boost_duration, touch_boost_duration_value, null_cb);
-power_attr(touch_boost_duration);
 static struct delayed_work touch_boost_work;
 static ssize_t
 touch_boost_show(struct kobject *kobj, struct kobj_attribute *attr,
@@ -321,47 +314,13 @@ touch_boost_store(struct kobject *kobj, struct kobj_attribute *attr,
 		else if (val && !is_touch_boosted){
 			is_touch_boosted = 1;
 			sysfs_notify(hotplug_kobj, NULL, "touch_boost");
-			schedule_delayed_work(&touch_boost_work,msecs_to_jiffies(touch_boost_duration_value));
+			schedule_delayed_work(&touch_boost_work,msecs_to_jiffies(val));
 		}
 		return n;
 	}
 	return -EINVAL;
 }
 power_attr(touch_boost);
-
-
-define_int_show(long_duration_touch_boost_duration, long_duration_touch_boost_duration_value);
-define_int_store(long_duration_touch_boost_duration, long_duration_touch_boost_duration_value, null_cb);
-power_attr(long_duration_touch_boost_duration);
-static struct delayed_work long_duration_touch_boost_work;
-static ssize_t
-long_duration_touch_boost_show(struct kobject *kobj, struct kobj_attribute *attr,
-		char *buf)
-{
-	return sprintf(buf, "%d", is_long_duration_touch_boosted);
-}
-static ssize_t
-long_duration_touch_boost_store(struct kobject *kobj, struct kobj_attribute *attr,
-		const char *buf, size_t n)
-{
-	int val;
-	if (sscanf(buf, "%d", &val) > 0) {
-		if (val == 0) {
-			cancel_delayed_work(&long_duration_touch_boost_work);
-			flush_scheduled_work();
-			is_long_duration_touch_boosted = 0;
-			sysfs_notify(pnpmgr_kobj, NULL, "long_duration_touch_boost");
-		}
-		else if (val && !is_long_duration_touch_boosted){
-			is_long_duration_touch_boosted = 1;
-			sysfs_notify(pnpmgr_kobj, NULL, "long_duration_touch_boost");
-			schedule_delayed_work(&long_duration_touch_boost_work,msecs_to_jiffies(long_duration_touch_boost_duration_value));
-		}
-		return n;
-	}
-	return -EINVAL;
-}
-power_attr(long_duration_touch_boost);
 
 
 static struct attribute *cpufreq_g[] = {
@@ -372,11 +331,6 @@ static struct attribute *cpufreq_g[] = {
 	NULL,
 };
 
-static struct attribute *pnpmgr_g[] = {
-	&long_duration_touch_boost_attr.attr,
-	&long_duration_touch_boost_duration_attr.attr,
-	NULL,
-};
 static struct attribute *hotplug_g[] = {
 #ifdef CONFIG_HOTPLUG_CPU
 	&mp_nw_attr.attr,
@@ -394,7 +348,6 @@ static struct attribute *hotplug_g[] = {
 	&mp_util_low_and_attr.attr,
 	&mp_util_low_or_attr.attr,
 	&touch_boost_attr.attr,
-	&touch_boost_duration_attr.attr,
 #endif
 	NULL,
 };
@@ -489,10 +442,6 @@ static struct attribute_group battery_attr_group = {
 	.attrs = battery_g,
 };
 
-static struct attribute_group pnpmgr_attr_group = {
-	.attrs = pnpmgr_g,
-};
-
 #ifdef CONFIG_HOTPLUG_CPU
 static int __cpuinit cpu_hotplug_callback(struct notifier_block *nfb, unsigned long action, void *hcpu)
 {
@@ -573,11 +522,6 @@ static void touch_boost_handler(struct work_struct *work)
 	is_touch_boosted = 0;
 	sysfs_notify(hotplug_kobj, NULL, "touch_boost");
 }
-static void long_duration_touch_boost_handler(struct work_struct *work)
-{
-	is_long_duration_touch_boosted = 0;
-	sysfs_notify(pnpmgr_kobj, NULL, "long_duration_touch_boost");
-}
 
 static int __init pnpmgr_init(void)
 {
@@ -587,7 +531,6 @@ static int __init pnpmgr_init(void)
 	app_timer.function = app_timeout_handler;
 
 	INIT_DELAYED_WORK(&touch_boost_work, touch_boost_handler);
-	INIT_DELAYED_WORK(&long_duration_touch_boost_work, long_duration_touch_boost_handler);
 
 	pnpmgr_kobj = kobject_create_and_add("pnpmgr", power_kobj);
 
@@ -609,8 +552,7 @@ static int __init pnpmgr_init(void)
 		return -ENOMEM;
 	}
 
-	ret = sysfs_create_group(pnpmgr_kobj, &pnpmgr_attr_group);
-	ret |= sysfs_create_group(cpufreq_kobj, &cpufreq_attr_group);
+	ret = sysfs_create_group(cpufreq_kobj, &cpufreq_attr_group);
 	ret |= sysfs_create_group(hotplug_kobj, &hotplug_attr_group);
 	ret |= sysfs_create_group(thermal_kobj, &thermal_attr_group);
 	ret |= sysfs_create_group(apps_kobj, &apps_attr_group);
@@ -632,7 +574,6 @@ static int __init pnpmgr_init(void)
 
 static void  __exit pnpmgr_exit(void)
 {
-	sysfs_remove_group(pnpmgr_kobj, &pnpmgr_attr_group);
 	sysfs_remove_group(cpufreq_kobj, &cpufreq_attr_group);
 	sysfs_remove_group(hotplug_kobj, &hotplug_attr_group);
 	sysfs_remove_group(thermal_kobj, &thermal_attr_group);

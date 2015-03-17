@@ -27,7 +27,7 @@
 
 #define PROCNAME "driver/hdf"
 #define FLAG_LEN 64
-static char htc_debug_flag[FLAG_LEN+1];
+static char htc_debug_flag[FLAG_LEN];
 extern int get_partition_num_by_name(char *name);
 static int offset=628;
 static int first_read=1;
@@ -70,11 +70,13 @@ int htc_debug_read(char *page, char **start, off_t off, int count, int *eof, voi
 {
     int len=FLAG_LEN+3;
     char R_Buffer[FLAG_LEN+3];
-    char RfMisc[FLAG_LEN+3];
+
     char filename[32] = "";
     struct file *filp = NULL;
     ssize_t nread;
     int pnum;
+
+    memset(R_Buffer,0,FLAG_LEN+3);
 
     if (off > 0) {
         len = 0;
@@ -95,17 +97,12 @@ int htc_debug_read(char *page, char **start, off_t off, int count, int *eof, voi
                 return PTR_ERR(filp);
             }
 
-            SECMSG("%s: offset :%d\n", __func__, offset);
+
             filp->f_pos = offset;
 
-            memset(RfMisc,0,FLAG_LEN+3);
-            nread = kernel_read(filp, filp->f_pos, RfMisc, FLAG_LEN+2);
-
             memset(htc_debug_flag,0,FLAG_LEN+1);
-            memcpy(htc_debug_flag,RfMisc+2,FLAG_LEN);
-
-            SECMSG("%s: RfMisc        :%s (%zd)\n", __func__,RfMisc, nread);
-            SECMSG("%s: htc_debug_flag:%s \n", __func__, htc_debug_flag);
+            nread = kernel_read(filp, filp->f_pos, htc_debug_flag, FLAG_LEN);
+            SECMSG("%s: %s (%zd)\n", __func__, htc_debug_flag, nread);
 
             if (filp)
                 filp_close(filp, NULL);
@@ -113,7 +110,6 @@ int htc_debug_read(char *page, char **start, off_t off, int count, int *eof, voi
             first_read = 0;
         }
 
-        memset(R_Buffer,0,FLAG_LEN+3);
         memcpy(R_Buffer,"0x",2);
         memcpy(R_Buffer+2,htc_debug_flag,FLAG_LEN);
         memcpy(page,R_Buffer,FLAG_LEN+3);
@@ -124,12 +120,12 @@ int htc_debug_read(char *page, char **start, off_t off, int count, int *eof, voi
 
 int htc_debug_write(struct file *file, const char *buffer, unsigned long count, void *data)
 {
-    char buf[FLAG_LEN+3]={0};
+    char buf[FLAG_LEN+3];
     char filename[32] = "";
     struct file *filp = NULL;
     ssize_t nread;
     int pnum;
-
+    
     SECMSG("%s called (count:%d)\n", __func__, (int)count);
 
     if (count != sizeof(buf))
@@ -140,6 +136,7 @@ int htc_debug_write(struct file *file, const char *buffer, unsigned long count, 
 
     memset(htc_debug_flag,0,FLAG_LEN+1);
     memcpy(htc_debug_flag,buf+2,FLAG_LEN);
+    
 
     SECMSG("Receive :%s\n",buf);
     SECMSG("Flag    :%s\n",htc_debug_flag);
@@ -159,10 +156,10 @@ int htc_debug_write(struct file *file, const char *buffer, unsigned long count, 
         return PTR_ERR(filp);
     }
 
-    SECMSG("%s: offset :%d\n", __func__, offset);
+
     filp->f_pos = offset;
-    nread = kernel_write(filp, buf, FLAG_LEN+2, filp->f_pos);
-    SECMSG("%s:wrire: %s (%zd)\n", __func__, buf, nread);
+    nread = kernel_write(filp, htc_debug_flag, FLAG_LEN, filp->f_pos);
+    SECMSG("%s:wrire: %s (%zd)\n", __func__, htc_debug_flag, nread);
 
     if (filp)
         filp_close(filp, NULL);
